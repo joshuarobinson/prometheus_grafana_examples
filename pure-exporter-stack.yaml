@@ -1,0 +1,136 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: purewatch
+  labels:
+    app: purewatch
+spec:
+  clusterIP: None
+  ports:
+  - name: graf-port
+    port: 3000
+  - name: prom-port
+    port: 9090
+  selector:
+    app: purewatch
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: purewatch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: purewatch
+  template:
+    metadata:
+      labels:
+        app: purewatch
+    spec:
+      containers:
+      - name: exporter
+        image: genegatpure/pure-exporter
+        ports:
+        - containerPort: 9491
+          name: mtx-port
+        imagePullPolicy: Always
+      - name: prometheus
+        image: prom/prometheus
+        args: ["--config.file=/etc/prometheus/prometheus.yml"]
+        ports:
+        - containerPort: 9090
+          name: prom-port
+        volumeMounts:
+        - name: pw-config-vol
+          mountPath: /etc/prometheus/prometheus.yml
+          subPath: prometheus.yml
+        - name: prom-data
+          mountPath: /prometheus
+        imagePullPolicy: Always
+      - name: grafana
+        image: grafana/grafana
+        ports:
+        - containerPort: 3000
+          name: graf-port
+        volumeMounts:
+        - name: pw-config-vol
+          mountPath: /etc/grafana/provisioning/datasources/datasource.yml
+          subPath: datasource.yml
+        - name: graf-data
+          mountPath: /var/lib/grafana
+      restartPolicy: Always
+      volumes:
+      - name: pw-config-vol
+        configMap:
+          name: purewatch-config
+      - name: prom-data
+        persistentVolumeClaim:
+          claimName: pw-prom-claim
+      - name: graf-data
+        persistentVolumeClaim:
+          claimName: pw-graf-claim
+---
+kind: ConfigMap 
+apiVersion: v1 
+metadata:
+  name: purewatch-config
+data:
+  prometheus.yml: |-
+    global:
+      scrape_interval: 30s
+
+    scrape_configs:
+    - job_name: 'pure_flashblade'
+      scrape_timeout: 30s
+      metrics_path: /metrics/flashblade
+      relabel_configs:
+        - source_labels: [__address__]
+          target_label: __param_endpoint
+        - source_labels: [__pure_apitoken]
+          target_label: __param_apitoken
+        - source_labels: [__address__]
+          target_label: instance
+        - target_label: __address__
+          replacement: 127.0.0.1:9491
+      static_configs:
+        - targets: [ REPLACE ]   # FlashBlade Management IP address
+          labels:
+            __pure_apitoken: REPLACE  # pureadmin list --api-token --expose
+
+  datasource.yml: |-
+    apiVersion: 1
+
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://127.0.0.1:9090
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: pw-prom-claim
+  labels:
+    app: prometheus
+spec:
+  storageClassName: pure-file
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Ti
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: pw-graf-claim
+  labels:
+    app: grafana
+spec:
+  storageClassName: pure-file
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
